@@ -32,7 +32,7 @@ jobs:
         run: |
           test -f out/index.html
           echo "Static export generated: out/index.html"
-      - name: Self-host MediaPipe WASM and face/hand models
+      - name: Self-host MediaPipe hand model and WASM
         shell: bash
         run: |
           set -euo pipefail
@@ -44,13 +44,23 @@ jobs:
           curl --fail --location --retry 5 --retry-all-errors --connect-timeout 20 --max-time 180 \
             "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task" \
             --output out/mediapipe/models/hand_landmarker.task
-          curl --fail --location --retry 5 --retry-all-errors --connect-timeout 20 --max-time 180 \
-            "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task" \
-            --output out/mediapipe/models/face_landmarker.task
           test -s out/mediapipe/models/hand_landmarker.task
-          test -s out/mediapipe/models/face_landmarker.task
           test -s out/mediapipe/wasm/vision_wasm_internal.wasm
           echo "All locally hosted tracking assets are in out/mediapipe."
+      - name: Bundle handwriting recognition worker and OCR resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out/ocr/core out/ocr/lang
+          cp node_modules/tesseract.js/dist/worker.min.js out/ocr/worker.min.js
+          cp node_modules/tesseract.js-core/tesseract-core*.js out/ocr/core/
+          cp node_modules/tesseract.js-core/tesseract-core*.wasm out/ocr/core/
+          curl --fail --location --retry 5 --retry-all-errors --connect-timeout 20 --max-time 180 \
+            "https://tessdata.projectnaptha.com/4.0.0/eng.traineddata.gz" \
+            --output out/ocr/lang/eng.traineddata.gz
+          test -s out/ocr/worker.min.js
+          test -s out/ocr/lang/eng.traineddata.gz
+          echo "OCR resources bundled for same-origin loading."
       - name: Disable Jekyll processing
         run: touch out/.nojekyll
       - name: Configure Pages
