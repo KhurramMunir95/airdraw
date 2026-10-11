@@ -1,43 +1,32 @@
-# AirDraw Studio
+# AirDraw Studio v2
 
-AirDraw is a **Next.js 15 + TypeScript** webcam drawing playground with MediaPipe hand/face tracking and optional handwritten word recognition.
+Interactive Next.js + TypeScript drawing studio powered by MediaPipe hand tracking.
 
-## Live site
-https://khurrammunir95.github.io/airdraw/ (becomes available after GitHub Pages is enabled and the deployment workflow succeeds)
+## Live demo
+https://khurrammunir95.github.io/airdraw/
 
 ## Features
-- Draw by pinching your thumb and index finger while moving your hand
-- Visible 21-point hand skeleton and connectors
-- Face oval, eye and mouth tracking overlays
-- Optional *open mouth to recognize* trigger (requires webcam and Air-to-Text mode)
-- Air-to-Text experimental OCR using Tesseract.js. **Recognition is based on the drawing, not on face detection.**
-- Mouse drawing mode without camera
-- Neon and solid brushes, colors, brush size
-- Undo, clear, transparent PNG export
-- Local webcam processing; no webcam frames are uploaded
+- Webcam air drawing: pinch thumb and index finger, move to draw
+- 21 hand landmark points and connecting skeleton lines
+- Mouse/pointer drawing without webcam
+- Eraser radius control, undo, redo, clear canvas
+- Neon and solid brushes, colors, PNG export
+- Advanced Air-to-Text: stroke bounding-box crop, high-contrast rendering, enlarged writing, multiple Tesseract OCR recognition passes, word/letter modes
+- Editable recognition result, alternate readings and opt-in spelling suggestions
+- Optional custom vocabulary for correction suggestions
+- No face detection or face model downloads
 
-## Development
-Node.js 20+ recommended.
+## Recognition limitations
+Tesseract is general OCR and is not trained specifically for freehand air writing. Accuracy still depends heavily on letter separation, line width and quality of hand tracking. Suggestions are guesses, never silently substituted. For best results use solid-ink brush, write large block letters, and select Word or Letter mode.
 
+## Local development
 ```bash
 npm install
 npm run dev
 ```
+Open http://localhost:3000/airdraw/.
 
-Open http://localhost:3000/airdraw
+## Deployment
+GitHub Actions builds a static Next.js export and copies MediaPipe and OCR model resources into the Pages artifact. Set Settings → Pages → Source to GitHub Actions. Deployment: .github/workflows/deploy.yml.
 
-Production build: `npm run build`. Next.js static export writes to `out/`.
-
-## Deploy
-The workflow in `.github/workflows/deploy.yml` deploys `out/` on every push to main.
-
-In **Settings → Pages**, select **GitHub Actions** as the build/deployment source. Then review the **Actions** tab and your live URL.
-
-## Notes and limitations
-- Camera access requires HTTPS (GitHub Pages provides it) or localhost.
-- Hand and face model assets are retrieved from public Google and jsDelivr CDNs when starting the camera; OCR downloads its language resources on first use. Connection is required.
-- MediaPipe runs on-device after model loading. Webcam data is not transmitted by this code.
-- Small or joined-up handwriting may not OCR reliably. Write clearly and large.
-- Face tracking visualizes facial contours; it **cannot independently identify handwritten letters**.
-- Best experience is a modern desktop Chrome/Edge browser with a webcam.
-- The original source is released as a demonstration. Check third-party library licenses in their respective repositories.
+Camera frames remain on-device, but packaged recognition assets must download to the browser on first use. HTTPS and webcam permission are required for gesture drawing.
