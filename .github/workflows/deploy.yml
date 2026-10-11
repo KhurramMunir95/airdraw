@@ -32,6 +32,25 @@ jobs:
         run: |
           test -f out/index.html
           echo "Static export generated: out/index.html"
+      - name: Self-host MediaPipe WASM and face/hand models
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out/mediapipe/wasm out/mediapipe/models
+          cp node_modules/@mediapipe/tasks-vision/wasm/vision_wasm_internal.js out/mediapipe/wasm/
+          cp node_modules/@mediapipe/tasks-vision/wasm/vision_wasm_internal.wasm out/mediapipe/wasm/
+          cp node_modules/@mediapipe/tasks-vision/wasm/vision_wasm_nosimd_internal.js out/mediapipe/wasm/
+          cp node_modules/@mediapipe/tasks-vision/wasm/vision_wasm_nosimd_internal.wasm out/mediapipe/wasm/
+          curl --fail --location --retry 5 --retry-all-errors --connect-timeout 20 --max-time 180 \
+            "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task" \
+            --output out/mediapipe/models/hand_landmarker.task
+          curl --fail --location --retry 5 --retry-all-errors --connect-timeout 20 --max-time 180 \
+            "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task" \
+            --output out/mediapipe/models/face_landmarker.task
+          test -s out/mediapipe/models/hand_landmarker.task
+          test -s out/mediapipe/models/face_landmarker.task
+          test -s out/mediapipe/wasm/vision_wasm_internal.wasm
+          echo "All locally hosted tracking assets are in out/mediapipe."
       - name: Disable Jekyll processing
         run: touch out/.nojekyll
       - name: Configure Pages
