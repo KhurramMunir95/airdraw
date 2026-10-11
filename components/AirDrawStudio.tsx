@@ -147,7 +147,7 @@ export default function AirDrawStudio() {
               const p=(i:number)=>({x:(1-landmarks[i].x)*W,y:landmarks[i].y*H});
               if(skeletonRef.current){
                 ctx.strokeStyle="rgba(118,231,252,.76)";ctx.lineWidth=2;
-                for(const [a,b] of vision.HandLandmarker.HAND_CONNECTIONS){const q=p(a),r=p(b);ctx.beginPath();ctx.moveTo(q.x,q.y);ctx.lineTo(r.x,r.y);ctx.stroke();}
+                for(const {start,end} of vision.HandLandmarker.HAND_CONNECTIONS){const q=p(start),r=p(end);ctx.beginPath();ctx.moveTo(q.x,q.y);ctx.lineTo(r.x,r.y);ctx.stroke();}
                 landmarks.forEach((_:any,i:number)=>{const q=p(i);ctx.beginPath();ctx.arc(q.x,q.y,i===8?6:3,0,Math.PI*2);ctx.fillStyle=i===8?"#fff":"#76e7fc";ctx.fill();});
               }
               const tip=p(8), thumb=p(4);
