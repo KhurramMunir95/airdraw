@@ -8,3 +8,15 @@
 .suggestions small{flex-basis:100%}
 .suggestions button{border:1px solid #3b6373;background:#1b3545;color:#94eaff;padding:5px 10px;border-radius:7px;font-size:12px}
 .suggestions button:hover{background:#2a5164}
+
+/* AirDraw v3 — gesture shortcuts and precision controls */
+.gestureguide{margin:14px 0 0;padding:14px 17px;background:#142431;border:1px solid #315168;border-radius:12px;color:#dceef7}
+.gestureguide b{display:block;font-size:12px;margin-bottom:11px}
+.gestureguide>div{display:flex;flex-wrap:wrap;gap:8px}
+.gestureguide>div>span{border:1px solid #406072;border-radius:7px;padding:7px 9px;font-size:11px;background:#162f40;color:#a7eaff}
+.gestureguide small{display:block;color:#93a9b8;margin-top:11px;line-height:1.4}
+.gesturehud{position:absolute;right:17px;top:17px;padding:11px 14px;min-width:156px;border:1px solid #367286;border-radius:10px;background:#0d1925dd;pointer-events:none;color:#9ceafb;font-size:12px;z-index:3}
+.gesturehud b{display:block;margin-bottom:7px}
+.gesturebar{height:4px;border-radius:10px;background:#314255;overflow:hidden}
+.gesturebar span{height:100%;display:block;background:#7bdfff;transition:width .09s linear}
+@media(max-width:720px){.gesturehud{min-width:110px;padding:7px;right:7px;top:8px;font-size:10px}.gestureguide{margin:12px 0}}
