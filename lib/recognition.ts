@@ -1,7 +1,7 @@
 import { createWorker, PSM, type Worker } from "tesseract.js";
 
 export type Point = { x: number; y: number };
-export type InkStroke = { points: Point[]; color: string; width: number; mode: "neon" | "pen" };
+export type InkStroke = { points: Point[]; color: string; width: number; mode: "neon" | "pen" | "marker" };
 export type RecognitionMode = "word" | "letter";
 export type OCRCandidate = { text: string; confidence: number };
 export type OCRResult = { best: OCRCandidate; alternatives: OCRCandidate[]; suggestions: string[] };
