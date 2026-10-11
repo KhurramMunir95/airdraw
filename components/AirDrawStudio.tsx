@@ -7,6 +7,12 @@ type P = { x: number; y: number };
 type Stroke = { points: P[]; color: string; width: number; mode: "neon" | "pen" };
 type Vision = typeof import("@mediapipe/tasks-vision");
 const W = 960, H = 600;
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error(label + " timed out. Check your network and try again.")), ms);
+    promise.then(value => { window.clearTimeout(timer); resolve(value); }, error => { window.clearTimeout(timer); reject(error); });
+  });
+}
 const COLORS = ["#76e7fc", "#a892ff", "#ff8bce", "#fba870", "#f8f8ff", "#8ff8a3"];
 
 export default function AirDrawStudio() {
@@ -17,6 +23,7 @@ export default function AirDrawStudio() {
   const faceRef = useRef<any>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const rafRef = useRef<number>(0);
+  const sessionRef = useRef(0);
   const strokesRef = useRef<Stroke[]>([]);
   const activeRef = useRef<Stroke | null>(null);
   const lastPointRef = useRef<P | null>(null);
@@ -28,6 +35,7 @@ export default function AirDrawStudio() {
   const brushRef = useRef<"neon"|"pen">("neon");
   const [cameraOn, setCameraOn] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [loadingStage, setLoadingStage] = useState("Starting camera...");
   const [tracking, setTracking] = useState(false);
   const [faceFound, setFaceFound] = useState(false);
   const [mode, setMode] = useState<"hand"|"mouse">("hand");
@@ -95,6 +103,8 @@ export default function AirDrawStudio() {
   },[finishStroke,renderStrokes]);
 
   const stopCamera = useCallback(() => {
+    sessionRef.current += 1;
+    setLoadingStage("Starting camera...");
     cancelAnimationFrame(rafRef.current);
     streamRef.current?.getTracks().forEach(t=>t.stop());
     streamRef.current=null;
@@ -107,30 +117,50 @@ export default function AirDrawStudio() {
   },[finishStroke]);
 
   const startCamera = useCallback(async () => {
-    setLoading(true);setError("");
+    if (loading || streamRef.current) return;
+    const session = ++sessionRef.current;
+    setLoading(true); setError(""); setLoadingStage("Requesting camera permission...");
     try {
       if (!navigator.mediaDevices?.getUserMedia) throw new Error("Camera requires HTTPS or localhost and a supported browser.");
-      const stream = await navigator.mediaDevices.getUserMedia({video:{width:1280,height:720,facingMode:"user"},audio:false});
+      const stream = await withTimeout(
+        navigator.mediaDevices.getUserMedia({video:{width:1280,height:720,facingMode:"user"},audio:false}),
+        20000,"Camera permission");
+      if(session!==sessionRef.current){stream.getTracks().forEach(t=>t.stop());return;}
       streamRef.current=stream;
-      if(!videoRef.current) throw new Error("Camera preview is not available.");
-      videoRef.current.srcObject=stream;
-      await videoRef.current.play();
-      const vision:Vision=await import("@mediapipe/tasks-vision");
-      const fileset=await vision.FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-rc.20250304/wasm");
-      trackerRef.current=await vision.HandLandmarker.createFromOptions(fileset,{
-        baseOptions:{modelAssetPath:"https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",delegate:"GPU"},
+      const video=videoRef.current;
+      if(!video) throw new Error("Camera preview is not available.");
+      video.srcObject=stream;
+      // Show the actual webcam immediately: ML assets can be 10-30MB and must not hide the video.
+      setCameraOn(true); setLoadingStage("Starting live camera preview...");
+      await withTimeout(video.play(),12000,"Camera playback");
+      if(session!==sessionRef.current)return;
+
+      setLoadingStage("Downloading hand-tracking model (first launch may take longer)...");
+      const vision:Vision=await withTimeout(import("@mediapipe/tasks-vision"),20000,"Vision library");
+      const version="0.10.22-rc.20250304";
+      const cdns=[
+        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@"+version+"/wasm",
+        "https://unpkg.com/@mediapipe/tasks-vision@"+version+"/wasm"
+      ];
+      let fileset:Awaited<ReturnType<typeof vision.FilesetResolver.forVisionTasks>>|null=null;
+      for(const cdn of cdns) {
+        try {
+          fileset=await withTimeout(vision.FilesetResolver.forVisionTasks(cdn),18000,"Vision WASM files");
+          break;
+        } catch(e){ console.warn("WASM source failed:",cdn,e); }
+      }
+      if(!fileset)throw new Error("Could not load MediaPipe WASM files from either CDN. Check network access or disable blockers.");
+      const handModel="https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
+      // CPU delegate is the most compatible baseline across integrated/mobile GPUs.
+      const tracker=await withTimeout(vision.HandLandmarker.createFromOptions(fileset,{
+        baseOptions:{modelAssetPath:handModel,delegate:"CPU"},
         runningMode:"VIDEO",numHands:1,minHandDetectionConfidence:0.55,minTrackingConfidence:0.5
-      }).catch(async()=>vision.HandLandmarker.createFromOptions(fileset,{
-        baseOptions:{modelAssetPath:"https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",delegate:"CPU"},
-        runningMode:"VIDEO",numHands:1
-      }));
-      try {
-        faceRef.current=await vision.FaceLandmarker.createFromOptions(fileset,{
-          baseOptions:{modelAssetPath:"https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",delegate:"CPU"},
-          runningMode:"VIDEO",numFaces:1,outputFaceBlendshapes:true
-        });
-      } catch(e){console.warn("Face detector unavailable:",e);setError("Hand drawing works, but the face model could not load.");}
-      setCameraOn(true);setLoading(false);
+      }),45000,"Hand tracking model");
+      if(session!==sessionRef.current){tracker.close();return;}
+      trackerRef.current=tracker;
+      setLoading(false); setLoadingStage("");
+      // Start hand tracking NOW, rather than waiting for the optional face model.
+
       let frame=0;
       const tick=()=>{
         const v=videoRef.current, o=overlayRef.current, tracker=trackerRef.current, face=faceRef.current;
@@ -177,9 +207,36 @@ export default function AirDrawStudio() {
         rafRef.current=requestAnimationFrame(tick);
       };
       rafRef.current=requestAnimationFrame(tick);
-    }catch(e){stopCamera();setError(e instanceof Error?e.message:"Unable to start camera.");}
-    finally{setLoading(false);}
-  },[addPoint,stopCamera]);
+      // Face tracking loads independently; slow face-model downloads do not block drawing.
+      void (async () => {
+        try {
+          setLoadingStage("Loading optional face landmarks...");
+          const face=await withTimeout(vision.FaceLandmarker.createFromOptions(fileset!,{
+            baseOptions:{modelAssetPath:"https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",delegate:"CPU"},
+            runningMode:"VIDEO",numFaces:1,outputFaceBlendshapes:true
+          }),45000,"Face tracking model");
+          if(session!==sessionRef.current){face.close();return;}
+          faceRef.current=face;
+          setLoadingStage("");
+        } catch(e) {
+          if(session===sessionRef.current) {
+            console.warn("Optional face detector unavailable:",e);
+            setLoadingStage("");
+            setError("Hand drawing is ready, but face tracking could not load. You can keep drawing.");
+          }
+        }
+      })();
+    }catch(e){
+      if(session===sessionRef.current){
+        console.error("Camera or hand tracker failed:",e);
+        setError(e instanceof Error?e.message:"Unable to start tracking.");
+        setLoadingStage("");
+        setLoading(false);
+        // Keep a working camera preview visible after a tracking download failure.
+        if(!streamRef.current) setCameraOn(false);
+      }
+    }finally{if(session===sessionRef.current)setLoading(false);}
+  },[addPoint,loading]);
 
   const recognize = useCallback(async () => {
     if(!strokesRef.current.length && !activeRef.current){setError("Draw a word first, then choose Recognize.");return;}
@@ -222,8 +279,8 @@ export default function AirDrawStudio() {
         <div className="workspacehead"><div><span className="breadcrumb">STUDIO / LIVE CANVAS</span><h1>Draw something amazing<span>.</span></h1><p>Move your index finger. Pinch thumb and finger to draw.</p></div><div className="quickactions"><button title="Undo last stroke" onClick={undo}><Undo2 size={17}/></button><button title="Clear canvas" onClick={clear}><Trash2 size={17}/></button><button className="save" onClick={save}><Download size={16}/> Export PNG</button></div></div>
         <div className="canvasframe"><div className="canvastop"><span><span className="dot"/> LIVE CANVAS</span><span>960 × 600 <span className="dim">/</span> {mode.toUpperCase()} MODE</span></div>
           <div className="stage"><video ref={videoRef} muted autoPlay playsInline className={cameraOn?"video visible":"video"} /><div className="gridoverlay"/><canvas ref={drawingRef} width={W} height={H} className="drawing"/><canvas ref={overlayRef} width={W} height={H} className="overlay"/><canvas width={W} height={H} className="mousecanvas" style={{pointerEvents:mode==="mouse"?"auto":"none",touchAction:"none",cursor:mode==="mouse"?"crosshair":"default"}} onPointerDown={e=>{if(mode!=="mouse")return;e.currentTarget.setPointerCapture(e.pointerId);addPoint(mousePoint(e),true);}} onPointerMove={e=>{if(mode==="mouse" && e.buttons===1)addPoint(mousePoint(e),true);}} onPointerUp={()=>finishStroke()} onPointerCancel={()=>finishStroke()}/>
-            {!cameraOn && mode==="hand" && <div className="stageempty"><div className="emptyicon"><Hand size={42}/></div><h2>Your canvas is ready</h2><p>Turn on your camera to draw in the air, or switch to mouse mode to try it now.</p><button onClick={startCamera} disabled={loading} className="primary"><Camera size={17}/>{loading?"Loading tracking models...":"Enable camera"}</button></div>}
-            {cameraOn && <div className="trackingpill"><span className={tracking?"green":"yellow"}/> {tracking?"Hand detected — pinch to draw":"Show your hand to the camera"}</div>}
+            {!cameraOn && mode==="hand" && <div className="stageempty"><div className="emptyicon"><Hand size={42}/></div><h2>Your canvas is ready</h2><p>Turn on your camera to draw in the air, or switch to mouse mode to try it now.</p><button onClick={startCamera} disabled={loading} className="primary"><Camera size={17}/>{loading ? loadingStage : "Enable camera"}</button></div>}
+            {cameraOn && <div className="trackingpill"><span className={tracking?"green":"yellow"}/> {loading ? loadingStage : tracking ? "Hand detected — pinch to draw" : trackerRef.current ? "Show your hand to the camera" : "Hand tracker unavailable — restart camera"}</div>}
           </div><div className="canvasbottom"><div><span className="statusdot"/> {strokesCount} strokes <span className="midpoint">·</span> {faceFound?"Face detected":"Face not detected"}</div><div>PRIVATE & LOCAL <span className="midpoint">·</span> NO VIDEO UPLOADS</div></div></div>
         {error && <div className="error"><span>{error}</span><button onClick={()=>setError("")}><X size={14}/></button></div>}
         <div className="instructions"><div><span className="instructionicon"><Hand size={20}/></span><div><b>01. Show your hand</b><small>Keep it visible in the frame</small></div></div><div><span className="instructionicon"><MousePointer2 size={20}/></span><div><b>02. Pinch to draw</b><small>Touch thumb and index finger</small></div></div><div><span className="instructionicon"><Sparkles size={20}/></span><div><b>03. Create & save</b><small>Release, recognize, or export</small></div></div></div>
@@ -231,7 +288,7 @@ export default function AirDrawStudio() {
       <aside className="sidebar rightbar"><div className="asidehead"><span>SMART TOOLS</span><Sparkles size={16}/></div>
         <div className="smartcard"><div className="smarticon"><Type size={20}/></div><b>Air-to-Text</b><p>Write a word in the air, then convert your handwriting into typed text.</p><label className="toggle switchrow"><span>Recognition mode</span><input type="checkbox" checked={wordMode} onChange={e=>setWordMode(e.target.checked)}/></label>
         {wordMode && <><label className="toggle switchrow"><span>Open mouth to recognize</span><input type="checkbox" checked={faceGesture} onChange={e=>{setFaceGesture(e.target.checked);gestureRef.current=e.target.checked;}}/></label><button className="recognize" disabled={reading} onClick={recognize}>{reading?<RefreshCw size={16} className="spin"/>:<Type size={16}/>} {reading?"Recognizing...":"Recognize writing"}</button><div className="result"><small>RECOGNIZED TEXT</small><div>{recognized || "Your text will appear here..."}</div>{recognized && <button title="Copy text" onClick={()=>navigator.clipboard.writeText(recognized)}>Copy text</button>}</div><small className="hint">Handwriting OCR is experimental; write large, clear, separated letters for better results. Face tracking can trigger recognition but cannot read letters itself.</small></>}
-        </div><div className="sepline"/><div className="paneltitle">CAMERA CONTROL</div>{cameraOn?<button onClick={stopCamera} className="camerabutton off"><CameraOff size={17}/> Turn camera off</button>:<button onClick={startCamera} disabled={loading} className="camerabutton"><Camera size={17}/>{loading?"Initializing...":"Turn camera on"}</button>}
+        </div><div className="sepline"/><div className="paneltitle">CAMERA CONTROL</div>{cameraOn?<button onClick={stopCamera} className="camerabutton off"><CameraOff size={17}/> Turn camera off</button>:<button onClick={startCamera} disabled={loading} className="camerabutton"><Camera size={17}/>{loading ? loadingStage : "Turn camera on"}</button>}
         <div className="systemstatus"><span>Hand tracker <b className={tracking?"online":"offline"}>{tracking?"ACTIVE":"STANDBY"}</b></span><span>Face tracker <b className={faceFound?"online":"offline"}>{faceFound?"DETECTED":"STANDBY"}</b></span><span>Processing <b>ON DEVICE</b></span></div>
       </aside>
     </section><footer className="footer"><span>AirDraw Studio © 2026</span><span>Built for creativity, powered by computer vision.</span></footer>
