@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Camera, CameraOff, Download, Eraser, Hand, Sparkles, Type, Undo2, Redo2, Trash2, MousePointer2, RefreshCw, Check, X, PenLine, Settings2 } from "lucide-react";
 
+import { GestureHold, detectHandSign, GESTURE_LABELS, smoothCursor, type HandSign } from "../lib/gestures";
 import { recognizeInk, type OCRResult, type RecognitionMode, type InkStroke } from "../lib/recognition";
 type P = { x: number; y: number };
 type Stroke = InkStroke;
@@ -22,6 +23,20 @@ export default function AirDrawStudio() {
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const trackerRef = useRef<any>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const gestureHoldRef=useRef(new GestureHold());
+  const cursorRef=useRef<P|null>(null);
+  const [gesturesEnabled,setGesturesEnabled]=useState(true);
+  const gesturesEnabledRef=useRef(true);
+  const [gestureStatus,setGestureStatus]=useState("Show a gesture");
+  const [gestureProgress,setGestureProgress]=useState(0);
+  const gestureStatusRef=useRef("");
+  const [stabilization,setStabilization]=useState(66);
+  const stabilizationRef=useRef(66);
+  const [precision,setPrecision]=useState(3);
+  const precisionRef=useRef(3);
+  const [pinchSensitivity,setPinchSensitivity]=useState(42);
+  const pinchSensitivityRef=useRef(42);
+  const [gestureHelp,setGestureHelp]=useState(true);
   const rafRef = useRef<number>(0);
   const sessionRef = useRef(0);
   const strokesRef = useRef<Stroke[]>([]);
@@ -31,7 +46,7 @@ export default function AirDrawStudio() {
   const modeRef = useRef<"hand"|"mouse">("hand");
   const colorRef = useRef(COLORS[0]);
   const widthRef = useRef(5);
-  const brushRef = useRef<"neon"|"pen">("neon");
+  const brushRef = useRef<"neon"|"pen"|"marker">("neon");
   const [cameraOn, setCameraOn] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadingStage, setLoadingStage] = useState("Starting camera...");
@@ -41,7 +56,7 @@ export default function AirDrawStudio() {
   const skeletonRef = useRef(true);
   const [color, setColor] = useState(COLORS[0]);
   const [width, setWidth] = useState(5);
-  const [brush, setBrush] = useState<"neon"|"pen">("neon");
+  const [brush, setBrush] = useState<"neon"|"pen"|"marker">("neon");
   const [wordMode, setWordMode] = useState(false);
   const [ocrMode,setOcrMode] = useState<RecognitionMode>("word");
   const [ocrResult,setOcrResult] = useState<OCRResult|null>(null);
@@ -97,10 +112,11 @@ export default function AirDrawStudio() {
       ctx.lineWidth=s.width;
       ctx.lineJoin="round";
       ctx.lineCap="round";
+      ctx.globalAlpha=s.mode==="marker"?.58:1;
       ctx.shadowColor=s.mode === "neon" ? s.color : "transparent";
       ctx.shadowBlur=s.mode === "neon" ? 17 : 0;
       ctx.stroke();
-      ctx.shadowBlur=0;
+      ctx.shadowBlur=0;ctx.globalAlpha=1;
       if(s.points.length===1){ctx.beginPath();ctx.arc(last.x,last.y,s.width/2,0,Math.PI*2);ctx.fillStyle=s.color;ctx.fill();}
     }
   }, []);
@@ -120,7 +136,7 @@ export default function AirDrawStudio() {
       pinchingRef.current=true;
     } else if (activeRef.current) {
       const prev=lastPointRef.current;
-      if(!prev || Math.hypot(point.x-prev.x,point.y-prev.y)>2.3) activeRef.current.points.push(point);
+      if(!prev || Math.hypot(point.x-prev.x,point.y-prev.y)>precisionRef.current) activeRef.current.points.push(point);
     }
     lastPointRef.current=point;
     renderStrokes();
@@ -128,6 +144,7 @@ export default function AirDrawStudio() {
 
   const stopCamera = useCallback(() => {
     sessionRef.current += 1;
+    gestureHoldRef.current.reset();cursorRef.current=null;
     setLoadingStage("Starting camera...");
     cancelAnimationFrame(rafRef.current);
     streamRef.current?.getTracks().forEach(t=>t.stop());
@@ -196,13 +213,34 @@ export default function AirDrawStudio() {
                 for(const {start,end} of vision.HandLandmarker.HAND_CONNECTIONS){const q=p(start),r=p(end);ctx.beginPath();ctx.moveTo(q.x,q.y);ctx.lineTo(r.x,r.y);ctx.stroke();}
                 landmarks.forEach((_:any,i:number)=>{const q=p(i);ctx.beginPath();ctx.arc(q.x,q.y,i===8?6:3,0,Math.PI*2);ctx.fillStyle=i===8?"#fff":"#76e7fc";ctx.fill();});
               }
-              const tip=p(8), thumb=p(4);
-              const distance=Math.hypot(tip.x-thumb.x,tip.y-thumb.y);
-              const pinch=pinchingRef.current ? distance<56 : distance<37;
+              const rawTip=p(8), thumb=p(4);
+              const tip=smoothCursor(cursorRef.current,rawTip,stabilizationRef.current);
+              cursorRef.current=tip;
+              const palmSize=Math.hypot(p(0).x-p(9).x,p(0).y-p(9).y);
+              const pinchRatio=Math.hypot(rawTip.x-thumb.x,rawTip.y-thumb.y)/Math.max(20,palmSize);
+              const threshold=pinchSensitivityRef.current/100;
+              const pinch=pinchingRef.current ? pinchRatio<threshold*1.4 : pinchRatio<threshold;
               if(modeRef.current==="hand") addPoint(tip,pinch);
+              if(gesturesEnabledRef.current && !pinch && !pinchingRef.current){
+                const event=gestureHoldRef.current.update(detectHandSign(landmarks),performance.now());
+                const label=event.candidate?GESTURE_LABELS[event.candidate]:"Show a gesture";
+                if(gestureStatusRef.current!==label){gestureStatusRef.current=label;setGestureStatus(label);}
+                setGestureProgress(Math.round(event.progress*100));
+                if(event.triggered){
+                  const sign=event.triggered;
+                  if(sign==="victory"){toolRef.current="erase";setTool("erase");}
+                  if(sign==="open"){toolRef.current="draw";setTool("draw");brushRef.current="neon";setBrush("neon");}
+                  if(sign==="three"){toolRef.current="draw";setTool("draw");brushRef.current="pen";setBrush("pen");}
+                  if(sign==="thumbs_up"){toolRef.current="draw";setTool("draw");brushRef.current="marker";setBrush("marker");}
+                  if(sign==="fist"){const previous=undoRef.current.pop();if(previous){redoRef.current.push(strokesRef.current.map(s=>({...s,points:s.points.map(v=>({...v}))})));setCanRedo(true);strokesRef.current=previous;setStrokesCount(previous.length);renderStrokes();}}
+                }
+              }else if(pinch)gestureHoldRef.current.reset();
               ctx.beginPath();ctx.arc(tip.x,tip.y,pinch?14:10,0,Math.PI*2);
               ctx.strokeStyle=pinch?"#a2ffa2":"#ffffff";ctx.lineWidth=3;ctx.stroke();
-            }else if(modeRef.current==="hand"){addPoint({x:0,y:0},false);}
+            }else{
+              cursorRef.current=null;gestureHoldRef.current.reset();
+              if(modeRef.current==="hand")addPoint({x:0,y:0},false);
+            }
           }catch(e){console.warn("Tracking frame failed",e);}
         }
         rafRef.current=requestAnimationFrame(tick);
@@ -219,7 +257,7 @@ export default function AirDrawStudio() {
         if(!streamRef.current) setCameraOn(false);
       }
     }finally{if(session===sessionRef.current)setLoading(false);}
-  },[addPoint,loading]);
+  },[addPoint,loading,renderStrokes]);
 
   const recognize = async () => {
     finishStroke();setReading(true);setError("");
@@ -237,7 +275,7 @@ export default function AirDrawStudio() {
   const save=()=>{const c=document.createElement("canvas");c.width=W;c.height=H;const ctx=c.getContext("2d");if(!ctx)return;ctx.drawImage(drawingRef.current!,0,0);const a=document.createElement("a");a.download="airdraw-art.png";a.href=c.toDataURL("image/png");a.click();};
   const mousePoint=(e:React.PointerEvent<HTMLCanvasElement>):P=>{const b=e.currentTarget.getBoundingClientRect();return{x:(e.clientX-b.left)/b.width*W,y:(e.clientY-b.top)/b.height*H};};
   return <main className="app">
-    <header className="topbar"><div className="brand"><div className="brandmark"><Sparkles size={21}/></div><div><strong>AirDraw<span> Studio</span></strong><small>CREATE WITHOUT TOUCHING</small></div></div><div className="headcenter"><span className="pulse"/> {cameraOn?"CAMERA LIVE":"CAMERA OFF"} <span className="headsplit">/</span> HAND {tracking?"DETECTED":"WAITING"} </div><div className="topactions"><span className="version">v2.0</span><a href="https://github.com/KhurramMunir95/airdraw" target="_blank" rel="noopener noreferrer" className="github">GitHub ↗</a></div></header>
+    <header className="topbar"><div className="brand"><div className="brandmark"><Sparkles size={21}/></div><div><strong>AirDraw<span> Studio</span></strong><small>CREATE WITHOUT TOUCHING</small></div></div><div className="headcenter"><span className="pulse"/> {cameraOn?"CAMERA LIVE":"CAMERA OFF"} <span className="headsplit">/</span> HAND {tracking?"DETECTED":"WAITING"} </div><div className="topactions"><span className="version">v3.0</span><a href="https://github.com/KhurramMunir95/airdraw" target="_blank" rel="noopener noreferrer" className="github">GitHub ↗</a></div></header>
     <section className="content">
       <aside className="sidebar"><div className="asidehead"><span>WORKSPACE</span><Settings2 size={16}/></div>
         <div className="paneltitle">Input mode</div>
@@ -247,10 +285,22 @@ export default function AirDrawStudio() {
         <div className="modebuttons"><button className={tool==="draw"?"selected":""} onClick={()=>setActiveTool("draw")}><PenLine size={17}/> Draw</button><button className={tool==="erase"?"selected":""} onClick={()=>setActiveTool("erase")}><Eraser size={17}/> Erase</button></div>
         {tool==="erase" && <><label className="rangehead">Eraser radius <strong>{eraserSize}px</strong></label><input className="slider" type="range" min="10" max="70" value={eraserSize} onChange={e=>{setEraserSize(+e.target.value);eraserSizeRef.current=+e.target.value;}} /></>}
         <div className="sepline"/>
-        <div className="paneltitle">Brush style</div><div className="brushes"><button className={brush==="neon"?"brush selected":"brush"} onClick={()=>{brushRef.current="neon";setBrush("neon");}}><Sparkles size={17}/> Neon glow <Check size={14}/></button><button className={brush==="pen"?"brush selected":"brush"} onClick={()=>{brushRef.current="pen";setBrush("pen");}}><PenLine size={17}/> Solid ink <Check size={14}/></button></div>
+        <div className="paneltitle">Brush style</div><div className="brushes"><button className={brush==="neon"?"brush selected":"brush"} onClick={()=>{brushRef.current="neon";setBrush("neon");}}><Sparkles size={17}/> Neon glow <Check size={14}/></button><button className={brush==="pen"?"brush selected":"brush"} onClick={()=>{brushRef.current="pen";setBrush("pen");}}><PenLine size={17}/> Solid ink <Check size={14}/></button><button className={brush==="marker"?"brush selected":"brush"} onClick={()=>{brushRef.current="marker";setBrush("marker");}}><PenLine size={17}/> Marker <Check size={14}/></button></div>
         <div className="sepline"/>
         <div className="paneltitle">Stroke color</div><div className="swatches">{COLORS.map(c=><button key={c} aria-label={c} onClick={()=>{setColor(c);colorRef.current=c;}} className={c===color?"swatch current":"swatch"} style={{background:c}} />)}</div>
         <label className="rangehead">Brush size <strong>{width}px</strong></label><input className="slider" type="range" min="2" max="26" value={width} onChange={e=>{const n=+e.target.value;setWidth(n);widthRef.current=n;}} />
+        <div className="sepline"/>
+        <div className="paneltitle">Precision controls</div>
+        <label className="rangehead">Stroke stabilization <strong>{stabilization}%</strong></label>
+        <input className="slider" aria-label="Stabilization" type="range" min="0" max="100" value={stabilization} onChange={e=>{setStabilization(+e.target.value);stabilizationRef.current=+e.target.value;}} />
+        <label className="rangehead">Point spacing <strong>{precision}px</strong></label>
+        <input className="slider" type="range" min="1" max="12" step="1" value={precision} onChange={e=>{setPrecision(+e.target.value);precisionRef.current=+e.target.value;}} />
+        <label className="rangehead">Pinch threshold <strong>{pinchSensitivity}%</strong></label>
+        <input className="slider" type="range" min="20" max="75" value={pinchSensitivity} onChange={e=>{setPinchSensitivity(+e.target.value);pinchSensitivityRef.current=+e.target.value;}} />
+        <div className="sepline"/>
+        <div className="paneltitle">Gesture shortcuts</div>
+        <label className="toggle"><span><Hand size={16}/> Hand signs enabled</span><input type="checkbox" checked={gesturesEnabled} onChange={e=>{setGesturesEnabled(e.target.checked);gesturesEnabledRef.current=e.target.checked;gestureHoldRef.current.reset();}} /></label>
+        <label className="toggle"><span>Show gesture guide</span><input type="checkbox" checked={gestureHelp} onChange={e=>setGestureHelp(e.target.checked)} /></label>
         <div className="sepline"/>
         <div className="paneltitle">Tracking overlays</div>
         <label className="toggle"><span><Hand size={16}/> Hand skeleton</span><input type="checkbox" checked={showSkeleton} onChange={e=>{setShowSkeleton(e.target.checked);skeletonRef.current=e.target.checked;}} /></label>
@@ -261,8 +311,10 @@ export default function AirDrawStudio() {
         <div className="canvasframe"><div className="canvastop"><span><span className="dot"/> LIVE CANVAS</span><span>960 × 600 <span className="dim">/</span> {mode.toUpperCase()} MODE</span></div>
           <div className="stage"><video ref={videoRef} muted autoPlay playsInline className={cameraOn?"video visible":"video"} /><div className="gridoverlay"/><canvas ref={drawingRef} width={W} height={H} className="drawing"/><canvas ref={overlayRef} width={W} height={H} className="overlay"/><canvas width={W} height={H} className="mousecanvas" style={{pointerEvents:mode==="mouse"?"auto":"none",touchAction:"none",cursor:mode==="mouse"?"crosshair":"default"}} onPointerDown={e=>{if(mode!=="mouse")return;e.currentTarget.setPointerCapture(e.pointerId);addPoint(mousePoint(e),true);}} onPointerMove={e=>{if(mode==="mouse" && e.buttons===1)addPoint(mousePoint(e),true);}} onPointerUp={()=>{finishStroke();eraseSnapshotRef.current=null;}} onPointerCancel={()=>{finishStroke();eraseSnapshotRef.current=null;}}/>
             {!cameraOn && mode==="hand" && <div className="stageempty"><div className="emptyicon"><Hand size={42}/></div><h2>Your canvas is ready</h2><p>Turn on your camera to draw in the air, or switch to mouse mode to try it now.</p><button onClick={startCamera} disabled={loading} className="primary"><Camera size={17}/>{loading ? loadingStage : "Enable camera"}</button></div>}
+            {cameraOn && gesturesEnabled && mode==="hand" && <div className="gesturehud"><b>{gestureStatus}</b><div className="gesturebar"><span style={{width:gestureProgress+"%"}}/></div></div>}
             {cameraOn && <div className="trackingpill"><span className={tracking?"green":"yellow"}/> {loading ? loadingStage : tracking ? "Hand detected — pinch to draw" : trackerRef.current ? "Show your hand to the camera" : "Hand tracker unavailable — restart camera"}</div>}
           </div><div className="canvasbottom"><div><span className="statusdot"/> {strokesCount} strokes <span className="midpoint">·</span> {tool==="erase"?"Eraser active":"Draw tool active"}</div><div>PRIVATE & LOCAL <span className="midpoint">·</span> NO VIDEO UPLOADS</div></div></div>
+        {gestureHelp && <div className="gestureguide"><b>Hand sign shortcuts · hold steady for 0.85s</b><div><span>✌ Eraser</span><span>3️⃣ Ink pen</span><span>🖐 Neon</span><span>👍 Marker</span><span>✊ Undo</span><span>🤏 Pinch to draw/erase</span></div><small>Release each gesture before using it again. Shortcuts are available in Hand mode and can be disabled.</small></div>}
         {error && <div className="error"><span>{error}</span><button onClick={()=>setError("")}><X size={14}/></button></div>}
         <div className="instructions"><div><span className="instructionicon"><Hand size={20}/></span><div><b>01. Show your hand</b><small>Keep it visible in the frame</small></div></div><div><span className="instructionicon"><MousePointer2 size={20}/></span><div><b>02. Pinch to draw</b><small>Touch thumb and index finger</small></div></div><div><span className="instructionicon"><Sparkles size={20}/></span><div><b>03. Create & save</b><small>Release, recognize, or export</small></div></div></div>
       </div>
