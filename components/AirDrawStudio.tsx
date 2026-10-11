@@ -116,7 +116,7 @@ export default function AirDrawStudio() {
       videoRef.current.srcObject=stream;
       await videoRef.current.play();
       const vision:Vision=await import("@mediapipe/tasks-vision");
-      const fileset=await vision.FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/wasm");
+      const fileset=await vision.FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-rc.20250304/wasm");
       trackerRef.current=await vision.HandLandmarker.createFromOptions(fileset,{
         baseOptions:{modelAssetPath:"https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",delegate:"GPU"},
         runningMode:"VIDEO",numHands:1,minHandDetectionConfidence:0.55,minTrackingConfidence:0.5
