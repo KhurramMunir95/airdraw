@@ -52,6 +52,7 @@ export default function AirDrawStudio() {
   const eraserSizeRef=useRef(32);
   const [canRedo,setCanRedo]=useState(false);
   const redoRef=useRef<Stroke[][]>([]);
+  const undoRef=useRef<Stroke[][]>([]);
   const eraseSnapshotRef=useRef<Stroke[]|null>(null);
   const [recognized, setRecognized] = useState("");
   const [reading, setReading] = useState(false);
@@ -62,7 +63,7 @@ export default function AirDrawStudio() {
   const cloneStrokes=(strokes:Stroke[])=>strokes.map(s=>({...s,points:s.points.map(p=>({...p}))}));
   const eraseAt=(point:P)=>{
     const radius=eraserSizeRef.current;
-    if(!eraseSnapshotRef.current)eraseSnapshotRef.current=cloneStrokes(strokesRef.current);
+    if(!eraseSnapshotRef.current){eraseSnapshotRef.current=cloneStrokes(strokesRef.current);undoRef.current.push(eraseSnapshotRef.current);rememberChange();}
     const result:Stroke[]=[];
     for(const stroke of strokesRef.current){
       let part:P[]=[];
@@ -105,7 +106,7 @@ export default function AirDrawStudio() {
   }, []);
 
   const finishStroke = useCallback(() => {
-    if (activeRef.current?.points.length) { strokesRef.current.push(activeRef.current);rememberChange(); }
+    if (activeRef.current?.points.length) { undoRef.current.push(cloneStrokes(strokesRef.current));strokesRef.current.push(activeRef.current);rememberChange(); }
     activeRef.current=null; lastPointRef.current=null; pinchingRef.current=false;
     setStrokesCount(strokesRef.current.length);
     renderStrokes();
@@ -229,10 +230,10 @@ export default function AirDrawStudio() {
     finally{setReading(false);}
   };
   useEffect(()=>()=>{cancelAnimationFrame(rafRef.current);streamRef.current?.getTracks().forEach(t=>t.stop());trackerRef.current?.close?.();},[]);
-  const clear=()=>{finishStroke();rememberChange();strokesRef.current=[];setStrokesCount(0);setRecognized("");setOcrResult(null);renderStrokes();};
-  const undo=()=>{finishStroke();if(!strokesRef.current.length)return;redoRef.current.push(cloneStrokes(strokesRef.current));setCanRedo(true);strokesRef.current.pop();setStrokesCount(strokesRef.current.length);renderStrokes();};
-  const redo=()=>{finishStroke();const next=redoRef.current.pop();if(!next)return;strokesRef.current=next;setCanRedo(redoRef.current.length>0);setStrokesCount(next.length);renderStrokes();};
-  const setActiveTool=(t:"draw"|"erase")=>{finishStroke();toolRef.current=t;setTool(t);};
+  const clear=()=>{finishStroke();undoRef.current.push(cloneStrokes(strokesRef.current));rememberChange();strokesRef.current=[];setStrokesCount(0);setRecognized("");setOcrResult(null);renderStrokes();};
+  const undo=()=>{finishStroke();const previous=undoRef.current.pop();if(!previous)return;redoRef.current.push(cloneStrokes(strokesRef.current));setCanRedo(true);strokesRef.current=previous;setStrokesCount(previous.length);renderStrokes();};
+  const redo=()=>{finishStroke();const next=redoRef.current.pop();if(!next)return;undoRef.current.push(cloneStrokes(strokesRef.current));strokesRef.current=next;setCanRedo(redoRef.current.length>0);setStrokesCount(next.length);renderStrokes();};
+  const setActiveTool=(t:"draw"|"erase")=>{finishStroke();eraseSnapshotRef.current=null;toolRef.current=t;setTool(t);};
   const save=()=>{const c=document.createElement("canvas");c.width=W;c.height=H;const ctx=c.getContext("2d");if(!ctx)return;ctx.drawImage(drawingRef.current!,0,0);const a=document.createElement("a");a.download="airdraw-art.png";a.href=c.toDataURL("image/png");a.click();};
   const mousePoint=(e:React.PointerEvent<HTMLCanvasElement>):P=>{const b=e.currentTarget.getBoundingClientRect();return{x:(e.clientX-b.left)/b.width*W,y:(e.clientY-b.top)/b.height*H};};
   return <main className="app">
