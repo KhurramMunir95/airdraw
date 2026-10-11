@@ -137,20 +137,13 @@ export default function AirDrawStudio() {
 
       setLoadingStage("Downloading hand-tracking model (first launch may take longer)...");
       const vision:Vision=await withTimeout(import("@mediapipe/tasks-vision"),20000,"Vision library");
-      const version="0.10.22-rc.20250304";
-      const cdns=[
-        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@"+version+"/wasm",
-        "https://unpkg.com/@mediapipe/tasks-vision@"+version+"/wasm"
-      ];
-      let fileset:Awaited<ReturnType<typeof vision.FilesetResolver.forVisionTasks>>|null=null;
-      for(const cdn of cdns) {
-        try {
-          fileset=await withTimeout(vision.FilesetResolver.forVisionTasks(cdn),18000,"Vision WASM files");
-          break;
-        } catch(e){ console.warn("WASM source failed:",cdn,e); }
-      }
-      if(!fileset)throw new Error("Could not load MediaPipe WASM files from either CDN. Check network access or disable blockers.");
-      const handModel="https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
+      const assets = "/airdraw/mediapipe";
+      const wasmPath = assets + "/wasm";
+      const handModel = assets + "/models/hand_landmarker.task";
+      // Self-host heavy vision files on GitHub Pages to avoid end-user CDN connection resets.
+      const fileset=await withTimeout(
+        vision.FilesetResolver.forVisionTasks(wasmPath),
+        15000,"Local MediaPipe WASM");
       // CPU delegate is the most compatible baseline across integrated/mobile GPUs.
       const tracker=await withTimeout(vision.HandLandmarker.createFromOptions(fileset,{
         baseOptions:{modelAssetPath:handModel,delegate:"CPU"},
@@ -212,7 +205,7 @@ export default function AirDrawStudio() {
         try {
           setLoadingStage("Loading optional face landmarks...");
           const face=await withTimeout(vision.FaceLandmarker.createFromOptions(fileset!,{
-            baseOptions:{modelAssetPath:"https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",delegate:"CPU"},
+            baseOptions:{modelAssetPath:assets + "/models/face_landmarker.task",delegate:"CPU"},
             runningMode:"VIDEO",numFaces:1,outputFaceBlendshapes:true
           }),45000,"Face tracking model");
           if(session!==sessionRef.current){face.close();return;}
@@ -229,7 +222,8 @@ export default function AirDrawStudio() {
     }catch(e){
       if(session===sessionRef.current){
         console.error("Camera or hand tracker failed:",e);
-        setError(e instanceof Error?e.message:"Unable to start tracking.");
+        const detail = e instanceof Error ? e.message : String(e);
+        setError("Hand tracking initialization failed: " + detail + ". Check /airdraw/mediapipe files or refresh the page.");
         setLoadingStage("");
         setLoading(false);
         // Keep a working camera preview visible after a tracking download failure.
